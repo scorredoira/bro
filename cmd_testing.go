@@ -1,0 +1,633 @@
+package main
+
+import (
+	"bufio"
+	"fmt"
+	"io/fs"
+	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/go-rod/rod/lib/proto"
+)
+
+// Background processes started by the "start" command, cleaned up after all tests.
+var (
+	startedMu    sync.Mutex
+	startedProcs []*os.Process
+)
+
+type broTest struct {
+	name  string
+	file  string
+	lines []broLine
+}
+
+type broLine struct {
+	num  int
+	text string
+}
+
+type testResult struct {
+	test   *broTest
+	passed bool
+	err    error
+	line   int
+	dur    time.Duration
+}
+
+var testPortNext int32 = 10222
+
+func cmdTest(ctx *cmdContext, args []string) error {
+	workers := ctx.workers
+	headless := ctx.headless
+	var paths []string
+
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--workers", "-w":
+			if i+1 >= len(args) {
+				return fmt.Errorf("--workers requires a value")
+			}
+			i++
+			n, err := strconv.Atoi(args[i])
+			if err != nil {
+				return fmt.Errorf("invalid workers: %s", args[i])
+			}
+			workers = n
+		case "--headless":
+			headless = true
+		default:
+			paths = append(paths, args[i])
+		}
+	}
+
+	if len(paths) == 0 {
+		return fmt.Errorf("usage: bro test <file.bro|dir> [-w N] [--headless]")
+	}
+
+	// Collect test files.
+	var files []string
+	for _, p := range paths {
+		info, err := os.Stat(p)
+		if err != nil {
+			return fmt.Errorf("cannot access %s: %w", p, err)
+		}
+		if info.IsDir() {
+			filepath.WalkDir(p, func(path string, d fs.DirEntry, err error) error {
+				if err != nil {
+					return nil
+				}
+				if !d.IsDir() && strings.HasSuffix(path, ".bro") {
+					files = append(files, path)
+				}
+				return nil
+			})
+		} else {
+			files = append(files, p)
+		}
+	}
+
+	if len(files) == 0 {
+		return fmt.Errorf("no .bro test files found")
+	}
+
+	// Parse all test files.
+	tests := make([]*broTest, len(files))
+	for i, f := range files {
+		t, err := parseTestFile(f)
+		if err != nil {
+			return fmt.Errorf("parse %s: %w", f, err)
+		}
+		tests[i] = t
+	}
+
+	// Run tests with worker pool, printing results progressively.
+	totalStart := time.Now()
+	sem := make(chan struct{}, workers)
+	var wg sync.WaitGroup
+	var passed, failed int32
+	var printMu sync.Mutex
+
+	// Suppress command output during tests.
+	origStdout := os.Stdout
+	devNull, err := os.Open(os.DevNull)
+	if err != nil {
+		return fmt.Errorf("failed to open devnull: %w", err)
+	}
+	os.Stdout = devNull
+
+	for _, t := range tests {
+		wg.Add(1)
+		go func(t *broTest) {
+			defer wg.Done()
+			sem <- struct{}{}
+			r := runTest(headless, t)
+			<-sem
+
+			printMu.Lock()
+			if r.passed {
+				atomic.AddInt32(&passed, 1)
+				name := r.test.file
+				if r.test.name != "" {
+					name += " — " + r.test.name
+				}
+				fmt.Fprintf(origStdout, "PASS  %s (%s)\n", name, formatDur(r.dur))
+			} else {
+				atomic.AddInt32(&failed, 1)
+				loc := r.test.file
+				if r.line > 0 {
+					loc = fmt.Sprintf("%s:%d", r.test.file, r.line)
+				}
+				fmt.Fprintf(origStdout, "FAIL  %s — %v\n", loc, r.err)
+			}
+			printMu.Unlock()
+		}(t)
+	}
+
+	wg.Wait()
+	devNull.Close()
+	os.Stdout = origStdout
+
+	// Kill background processes started by "start" commands.
+	startedMu.Lock()
+	for _, p := range startedProcs {
+		p.Kill()
+		p.Wait()
+	}
+	startedProcs = nil
+	startedMu.Unlock()
+
+	p := atomic.LoadInt32(&passed)
+	f := atomic.LoadInt32(&failed)
+	fmt.Printf("\n%d tests, %d passed, %d failed (%s)\n", p+f, p, f, formatDur(time.Since(totalStart)))
+
+	if f > 0 {
+		os.Exit(1)
+	}
+	return nil
+}
+
+func parseTestFile(path string) (*broTest, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	t := &broTest{
+		file: path,
+	}
+
+	scanner := bufio.NewScanner(f)
+	lineNum := 0
+	for scanner.Scan() {
+		lineNum++
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+		if strings.HasPrefix(line, "#") {
+			if t.name == "" {
+				t.name = strings.TrimSpace(strings.TrimPrefix(line, "#"))
+			}
+			continue
+		}
+		t.lines = append(t.lines, broLine{num: lineNum, text: line})
+	}
+
+	return t, scanner.Err()
+}
+
+func runTest(headless bool, t *broTest) testResult {
+	start := time.Now()
+
+	// Allocate a unique port for this test.
+	port := allocTestPort()
+	ctx := &cmdContext{port: port, headless: headless}
+
+	// Variable store for exec captures.
+	vars := map[string]string{}
+
+	chromeStarted := false
+	defer func() {
+		if chromeStarted {
+			cmdClose(ctx)
+		}
+	}()
+
+	for _, line := range t.lines {
+		// Expand ${VAR} references before parsing.
+		expanded := expandVars(line.text, vars)
+		cmd, args := parseLine(expanded)
+
+		var err error
+		switch cmd {
+		case "open":
+			if !chromeStarted {
+				err = cmdOpen(ctx, args, true)
+				if err == nil {
+					chromeStarted = true
+					// Wait for SPA to render: WaitLoad for the HTML, then WaitStable
+				// for the JS framework to finish rendering.
+					if len(args) > 0 {
+						_, page, cerr := connect(ctx)
+						if cerr == nil {
+							page.WaitLoad()
+							page.WaitStable(300 * time.Millisecond)
+						}
+					}
+				}
+			} else if len(args) > 0 {
+				err = cmdNavigate(ctx, args)
+			}
+
+		case "navigate", "nav":
+			err = cmdNavigate(ctx, args)
+		case "reload":
+			err = cmdReload(ctx)
+		case "back":
+			err = cmdBack(ctx)
+		case "forward":
+			err = cmdForward(ctx)
+		case "resize":
+			err = cmdResize(ctx, args)
+
+		case "click":
+			err = cmdClick(ctx, args)
+		case "dblclick":
+			err = cmdDblClick(ctx, args)
+		case "fill":
+			err = cmdFill(ctx, args)
+		case "select":
+			err = cmdSelect(ctx, args)
+		case "type":
+			err = cmdType(ctx, args)
+		case "press":
+			err = cmdPress(ctx, args)
+		case "hover":
+			err = cmdHover(ctx, args)
+		case "drag":
+			err = cmdDrag(ctx, args)
+		case "upload":
+			err = cmdUpload(ctx, args)
+
+		case "wait":
+			err = cmdWait(ctx, args)
+
+		case "screenshot", "ss":
+			err = cmdScreenshot(ctx, args)
+		case "snapshot", "snap":
+			err = cmdSnapshot(ctx, args)
+
+		case "js":
+			err = cmdJS(ctx, args)
+
+		case "dialog":
+			err = cmdDialog(ctx, args)
+
+		case "assert":
+			err = execAssert(ctx, args)
+
+		case "exec":
+			err = execShell(expanded, vars)
+
+		case "start":
+			err = execStart(expanded)
+
+		default:
+			err = fmt.Errorf("unknown command: %s", cmd)
+		}
+
+		if err != nil {
+			return testResult{
+				test:   t,
+				passed: false,
+				err:    err,
+				line:   line.num,
+				dur:    time.Since(start),
+			}
+		}
+	}
+
+	return testResult{
+		test:   t,
+		passed: true,
+		dur:    time.Since(start),
+	}
+}
+
+// execAssert runs an assertion with automatic retry until timeout.
+func execAssert(ctx *cmdContext, args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: assert <url|text|gone|title|js> <value>")
+	}
+
+	timeout := defaultTimeout
+
+	// Parse --timeout flag.
+	for i := 0; i < len(args)-1; i++ {
+		if args[i] == "--timeout" {
+			d, err := time.ParseDuration(args[i+1])
+			if err != nil {
+				return fmt.Errorf("invalid timeout: %s", args[i+1])
+			}
+			timeout = d
+			args = append(args[:i], args[i+2:]...)
+			break
+		}
+	}
+
+	if len(args) < 2 {
+		return fmt.Errorf("usage: assert <url|text|gone|title|js> <value>")
+	}
+
+	kind := args[0]
+	value := strings.Join(args[1:], " ")
+
+	switch kind {
+	case "url":
+		return assertURL(ctx, value, timeout)
+	case "text":
+		return assertText(ctx, value, timeout)
+	case "gone":
+		return assertGone(ctx, value, timeout)
+	case "title":
+		return assertTitle(ctx, value, timeout)
+	case "js":
+		return assertJS(ctx, value, timeout)
+	default:
+		return fmt.Errorf("unknown assert: %s", kind)
+	}
+}
+
+func assertURL(ctx *cmdContext, pattern string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		_, page, err := connect(ctx)
+		if err != nil {
+			time.Sleep(300 * time.Millisecond)
+			continue
+		}
+		info, err := page.Info()
+		if err == nil && strings.Contains(info.URL, pattern) {
+			return nil
+		}
+		time.Sleep(300 * time.Millisecond)
+	}
+	return fmt.Errorf("assert url: URL does not contain %q", pattern)
+}
+
+func assertText(ctx *cmdContext, text string, timeout time.Duration) error {
+	lower := strings.ToLower(text)
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		_, page, err := connect(ctx)
+		if err != nil {
+			time.Sleep(300 * time.Millisecond)
+			continue
+		}
+		tree, err := proto.AccessibilityGetFullAXTree{}.Call(page)
+		if err != nil {
+			time.Sleep(300 * time.Millisecond)
+			continue
+		}
+		for _, node := range tree.Nodes {
+			if node.Ignored {
+				continue
+			}
+			name := axValueStr(node.Name)
+			if name != "" && strings.Contains(strings.ToLower(name), lower) {
+				return nil
+			}
+		}
+		time.Sleep(300 * time.Millisecond)
+	}
+	return fmt.Errorf("assert text: %q not found", text)
+}
+
+func assertGone(ctx *cmdContext, text string, timeout time.Duration) error {
+	lower := strings.ToLower(text)
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		_, page, err := connect(ctx)
+		if err != nil {
+			time.Sleep(300 * time.Millisecond)
+			continue
+		}
+		tree, err := proto.AccessibilityGetFullAXTree{}.Call(page)
+		if err != nil {
+			time.Sleep(300 * time.Millisecond)
+			continue
+		}
+		found := false
+		for _, node := range tree.Nodes {
+			if node.Ignored {
+				continue
+			}
+			name := axValueStr(node.Name)
+			if name != "" && strings.Contains(strings.ToLower(name), lower) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return nil
+		}
+		time.Sleep(300 * time.Millisecond)
+	}
+	return fmt.Errorf("assert gone: %q still present", text)
+}
+
+func assertTitle(ctx *cmdContext, text string, timeout time.Duration) error {
+	lower := strings.ToLower(text)
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		_, page, err := connect(ctx)
+		if err != nil {
+			time.Sleep(300 * time.Millisecond)
+			continue
+		}
+		info, err := page.Info()
+		if err == nil && strings.Contains(strings.ToLower(info.Title), lower) {
+			return nil
+		}
+		time.Sleep(300 * time.Millisecond)
+	}
+	return fmt.Errorf("assert title: title does not contain %q", text)
+}
+
+func assertJS(ctx *cmdContext, expr string, timeout time.Duration) error {
+	code := fmt.Sprintf("() => { return !!(%s) }", expr)
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		_, page, err := connect(ctx)
+		if err != nil {
+			time.Sleep(300 * time.Millisecond)
+			continue
+		}
+		result, err := page.Eval(code)
+		if err == nil && result != nil && result.Value.Bool() {
+			return nil
+		}
+		time.Sleep(300 * time.Millisecond)
+	}
+	return fmt.Errorf("assert js: %q is not truthy", expr)
+}
+
+// parseLine splits a test file line into command and arguments,
+// respecting double-quoted strings.
+func parseLine(line string) (string, []string) {
+	var tokens []string
+	var current strings.Builder
+	inQuotes := false
+
+	for i := 0; i < len(line); i++ {
+		ch := line[i]
+		switch {
+		case ch == '"':
+			inQuotes = !inQuotes
+		case ch == ' ' && !inQuotes:
+			if current.Len() > 0 {
+				tokens = append(tokens, current.String())
+				current.Reset()
+			}
+		default:
+			current.WriteByte(ch)
+		}
+	}
+	if current.Len() > 0 {
+		tokens = append(tokens, current.String())
+	}
+
+	if len(tokens) == 0 {
+		return "", nil
+	}
+	return tokens[0], tokens[1:]
+}
+
+func allocTestPort() int {
+	for {
+		port := int(atomic.AddInt32(&testPortNext, 1)) - 1
+		if !isPortOpen(port) {
+			return port
+		}
+	}
+}
+
+func formatDur(d time.Duration) string {
+	if d < time.Second {
+		return fmt.Sprintf("%dms", d.Milliseconds())
+	}
+	return fmt.Sprintf("%.1fs", d.Seconds())
+}
+
+// execShell runs a shell command and captures stdout into vars["result"].
+// Receives the full raw line (e.g. "exec --as TOKEN mysql -e \"SELECT ...\"").
+// Optional --as flag: exec --as TOKEN mysql ...  → vars["TOKEN"] = stdout
+func execShell(rawLine string, vars map[string]string) error {
+	// Strip the "exec" prefix.
+	shell := strings.TrimSpace(strings.TrimPrefix(rawLine, "exec"))
+	if shell == "" {
+		return fmt.Errorf("usage: exec <command> [args...]")
+	}
+
+	varName := "result"
+
+	// Parse optional --as flag from the beginning.
+	if strings.HasPrefix(shell, "--as ") {
+		rest := strings.TrimPrefix(shell, "--as ")
+		parts := strings.SplitN(rest, " ", 2)
+		if len(parts) < 2 {
+			return fmt.Errorf("exec --as: missing command")
+		}
+		varName = parts[0]
+		shell = parts[1]
+	}
+
+	cmd := exec.Command("sh", "-c", shell)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		output := strings.TrimSpace(string(out))
+		if output != "" {
+			return fmt.Errorf("exec failed: %w\n%s", err, output)
+		}
+		return fmt.Errorf("exec failed: %w", err)
+	}
+
+	vars[varName] = strings.TrimSpace(string(out))
+	return nil
+}
+
+// execStart ensures a server is running on the given port.
+// Syntax: start :PORT command...
+// If the port is already responding to HTTP, it's a no-op.
+// Otherwise, starts the command in background and waits for readiness.
+func execStart(rawLine string) error {
+	rest := strings.TrimSpace(strings.TrimPrefix(rawLine, "start"))
+	if rest == "" || !strings.HasPrefix(rest, ":") {
+		return fmt.Errorf("usage: start :PORT command...")
+	}
+
+	spaceIdx := strings.Index(rest, " ")
+	if spaceIdx < 0 {
+		return fmt.Errorf("usage: start :PORT command...")
+	}
+
+	port, err := strconv.Atoi(rest[1:spaceIdx])
+	if err != nil {
+		return fmt.Errorf("start: invalid port: %s", rest[1:spaceIdx])
+	}
+
+	shell := strings.TrimSpace(rest[spaceIdx+1:])
+	if shell == "" {
+		return fmt.Errorf("usage: start :PORT command...")
+	}
+
+	// If port already responds, reuse the running server.
+	if isPortOpen(port) {
+		return nil
+	}
+
+	// Start command in background.
+	cmd := exec.Command("sh", "-c", shell)
+	cmd.Stdout = nil
+	cmd.Stderr = nil
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("start: failed to run %q: %w", shell, err)
+	}
+
+	startedMu.Lock()
+	startedProcs = append(startedProcs, cmd.Process)
+	startedMu.Unlock()
+
+	// Wait for the port to accept HTTP connections.
+	client := &http.Client{Timeout: 1 * time.Second}
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		resp, err := client.Get(fmt.Sprintf("http://localhost:%d/", port))
+		if err == nil {
+			resp.Body.Close()
+			return nil
+		}
+		time.Sleep(300 * time.Millisecond)
+	}
+
+	cmd.Process.Kill()
+	return fmt.Errorf("start: port %d not ready after 30s", port)
+}
+
+// expandVars replaces ${VAR} references in a line.
+// Priority: exec-captured vars first, then environment variables.
+func expandVars(line string, vars map[string]string) string {
+	for name, value := range vars {
+		line = strings.ReplaceAll(line, "${"+name+"}", value)
+	}
+	return os.ExpandEnv(line)
+}

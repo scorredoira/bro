@@ -1,0 +1,230 @@
+package main
+
+import (
+	"fmt"
+	"os"
+	"strconv"
+)
+
+const defaultPort = 9222
+
+func main() {
+	if len(os.Args) < 2 {
+		printUsage()
+		os.Exit(1)
+	}
+
+	port := defaultPort
+	portSet := false
+	headless := false
+	workers := 1
+	args := os.Args[1:]
+
+	// Parse global flags.
+	for len(args) > 0 {
+		if args[0] == "--port" {
+			if len(args) < 2 {
+				fatal("--port requires a value")
+			}
+			p, err := strconv.Atoi(args[1])
+			if err != nil {
+				fatal("invalid port: %s", args[1])
+			}
+			port = p
+			portSet = true
+			args = args[2:]
+		} else if args[0] == "--headless" {
+			headless = true
+			args = args[1:]
+		} else if args[0] == "--workers" || args[0] == "-w" {
+			if len(args) < 2 {
+				fatal("--workers requires a value")
+			}
+			n, err := strconv.Atoi(args[1])
+			if err != nil {
+				fatal("invalid workers: %s", args[1])
+			}
+			workers = n
+			args = args[2:]
+		} else {
+			break
+		}
+	}
+
+	if len(args) == 0 {
+		printUsage()
+		os.Exit(1)
+	}
+
+	cmd := args[0]
+	cmdArgs := args[1:]
+
+	ctx := &cmdContext{port: port, headless: headless, workers: workers}
+
+	var err error
+	switch cmd {
+	// Chrome
+	case "open":
+		err = cmdOpen(ctx, cmdArgs, portSet)
+	case "close":
+		err = cmdClose(ctx)
+
+	// Navigation
+	case "navigate", "nav":
+		err = cmdNavigate(ctx, cmdArgs)
+	case "reload":
+		err = cmdReload(ctx)
+	case "back":
+		err = cmdBack(ctx)
+	case "forward":
+		err = cmdForward(ctx)
+	case "resize":
+		err = cmdResize(ctx, cmdArgs)
+
+	// Inspection
+	case "snapshot", "snap":
+		err = cmdSnapshot(ctx, cmdArgs)
+	case "screenshot", "ss":
+		err = cmdScreenshot(ctx, cmdArgs)
+	case "url":
+		err = cmdURL(ctx)
+	case "html":
+		err = cmdHTML(ctx)
+
+	// Interaction
+	case "click":
+		err = cmdClick(ctx, cmdArgs)
+	case "dblclick":
+		err = cmdDblClick(ctx, cmdArgs)
+	case "fill":
+		err = cmdFill(ctx, cmdArgs)
+	case "select":
+		err = cmdSelect(ctx, cmdArgs)
+	case "type":
+		err = cmdType(ctx, cmdArgs)
+	case "press":
+		err = cmdPress(ctx, cmdArgs)
+	case "hover":
+		err = cmdHover(ctx, cmdArgs)
+	case "drag":
+		err = cmdDrag(ctx, cmdArgs)
+	case "upload":
+		err = cmdUpload(ctx, cmdArgs)
+
+	// Waits
+	case "wait":
+		err = cmdWait(ctx, cmdArgs)
+
+	// Tabs
+	case "pages":
+		err = cmdPages(ctx)
+	case "page":
+		err = cmdPage(ctx, cmdArgs)
+	case "newpage":
+		err = cmdNewPage(ctx, cmdArgs)
+	case "closepage":
+		err = cmdClosePage(ctx)
+
+	// JavaScript
+	case "js":
+		err = cmdJS(ctx, cmdArgs)
+
+	// Debug
+	case "console":
+		err = cmdConsole(ctx)
+	case "network", "net":
+		err = cmdNetwork(ctx)
+
+	// Dialogs
+	case "dialog":
+		err = cmdDialog(ctx, cmdArgs)
+
+	// Testing
+	case "test":
+		err = cmdTest(ctx, cmdArgs)
+
+	// Internal
+	case "_monitor":
+		cmdMonitor(cmdArgs)
+		return
+
+	default:
+		fatal("unknown command: %s", cmd)
+	}
+
+	if err != nil {
+		fatal("%v", err)
+	}
+}
+
+func fatal(format string, args ...any) {
+	fmt.Fprintf(os.Stderr, "bro: "+format+"\n", args...)
+	os.Exit(1)
+}
+
+func printUsage() {
+	fmt.Print(`bro — browser remote operator
+
+Usage: bro [--port PORT] [--headless] [-w N] <command> [args...]
+
+Chrome:
+  open [url]            Launch Chrome, print port number
+  close                 Kill Chrome instance on this port
+
+Navigation:
+  navigate <url>       Go to URL
+  reload               Reload current page
+  back                 Go back in history
+  forward              Go forward in history
+  resize <w> <h>       Resize browser window
+
+Inspection:
+  snapshot [--verbose]  Print accessibility tree
+  screenshot [path]     Take screenshot (default: /tmp/bro.png)
+  url                   Print current URL
+  html                  Print page HTML
+
+Interaction:
+  click [--css sel] [--id id] [text]   Click element
+  dblclick [--css sel] [--id id] [text] Double-click element
+  fill <label> <value>  Fill input field by label
+  select <label> <val>  Select dropdown option
+  type <text>           Type raw text into focused element
+  press <key>           Press key (Enter, Tab, Escape, etc.)
+  hover [--css sel] [--id id] [text]   Hover over element
+  drag <from> <to>      Drag element to another
+  upload <sel> <file>   Upload file to input
+
+Waits:
+  wait <text>           Wait for text to appear
+  wait --gone <text>    Wait for text to disappear
+  wait --url <pattern>  Wait for URL to match
+
+Tabs:
+  pages                 List open tabs
+  page <id>             Switch to tab by index
+  newpage [url]         Open new tab
+  closepage             Close current tab
+
+JavaScript:
+  js <code>             Evaluate JavaScript
+
+Debug:
+  console               Show console messages
+  network               Show network requests
+
+Dialogs:
+  dialog accept [text]  Accept dialog (optional input for prompts)
+  dialog dismiss        Dismiss dialog
+
+Testing:
+  test <path> [-w N]  Run .bro test files (recursive)
+
+Session:
+  PORT=$(bro open http://localhost:9092/admin)
+  bro --port $PORT fill Email admin@demo.com
+  bro --port $PORT click Login
+
+Default port: 9222
+`)
+}
