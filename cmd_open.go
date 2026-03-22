@@ -77,10 +77,11 @@ func cmdOpen(ctx *cmdContext, args []string, portSet bool) error {
 		chromeArgs = append(chromeArgs, url)
 	}
 
-	cmd := exec.Command(chromePath, chromeArgs...)
-	if err := cmd.Start(); err != nil {
+	chromeCmd := exec.Command(chromePath, chromeArgs...)
+	if err := chromeCmd.Start(); err != nil {
 		return fmt.Errorf("failed to start Chrome: %w", err)
 	}
+	ctx.pid = chromeCmd.Process.Pid
 
 	// Wait for Chrome to be ready.
 	deadline := time.Now().Add(10 * time.Second)
@@ -88,7 +89,7 @@ func cmdOpen(ctx *cmdContext, args []string, portSet bool) error {
 		if isPortOpen(port) {
 			// Start background monitor to kill Chrome when all windows are closed.
 			if !ctx.headless {
-				startMonitor(port, cmd.Process.Pid)
+				startMonitor(port, chromeCmd.Process.Pid)
 			}
 			fmt.Println(port)
 			return nil

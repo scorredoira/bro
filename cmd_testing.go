@@ -217,8 +217,11 @@ func runTest(headless bool, t *broTest) testResult {
 
 	chromeStarted := false
 	defer func() {
-		if chromeStarted {
-			cmdClose(ctx)
+		if chromeStarted && ctx.pid != 0 {
+			if p, err := os.FindProcess(ctx.pid); err == nil {
+				p.Kill()
+				p.Wait()
+			}
 		}
 	}()
 
@@ -234,13 +237,10 @@ func runTest(headless bool, t *broTest) testResult {
 				err = cmdOpen(ctx, args, true)
 				if err == nil {
 					chromeStarted = true
-					// Wait for SPA to render: WaitLoad for the HTML, then WaitStable
-				// for the JS framework to finish rendering.
 					if len(args) > 0 {
 						_, page, cerr := connect(ctx)
 						if cerr == nil {
 							page.WaitLoad()
-							page.WaitStable(300 * time.Millisecond)
 						}
 					}
 				}

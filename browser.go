@@ -15,6 +15,7 @@ type cmdContext struct {
 	port     int
 	headless bool
 	workers  int
+	pid      int // Chrome process ID (used by tests for cleanup)
 }
 
 // chromeTarget represents a target from Chrome's /json/list endpoint.
