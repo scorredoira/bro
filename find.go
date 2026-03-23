@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -200,10 +201,22 @@ func stripZeroWidth(s string) string {
 // Uses RuntimeEvaluate for fast single-call DOM queries.
 // Retries for up to 3 seconds if not found immediately.
 func findByCSS(page *rod.Page, selector, textFilter string) (*rod.Element, error) {
+	return findByCSSIndex(page, selector, textFilter, -1)
+}
+
+// findByCSSIndex finds an element by CSS selector. If index >= 0, returns the
+// Nth element matching the selector (ignoring textFilter). If index < 0 and
+// textFilter is set, filters by text content. Retries for up to 3 seconds.
+func findByCSSIndex(page *rod.Page, selector, textFilter string, index int) (*rod.Element, error) {
 	deadline := time.Now().Add(retryTimeout)
 
 	var jsCode string
-	if textFilter == "" {
+	if index >= 0 {
+		jsCode = fmt.Sprintf(`(function(){
+			var els = document.querySelectorAll(%q);
+			return els.length > %d ? els[%d] : null;
+		})()`, selector, index, index)
+	} else if textFilter == "" {
 		jsCode = fmt.Sprintf(`document.querySelector(%q)`, selector)
 	} else {
 		jsCode = fmt.Sprintf(`(function(){
@@ -229,13 +242,45 @@ func findByCSS(page *rod.Page, selector, textFilter string) (*rod.Element, error
 		}
 
 		if time.Now().After(deadline) {
+			if index >= 0 {
+				return nil, fmt.Errorf("no element matching %q at index %d", selector, index)
+			}
 			if textFilter != "" {
-				return nil, fmt.Errorf("no element matching %q with text %q", selector, textFilter)
+				hint := cssSampleTexts(page, selector, textFilter)
+				return nil, fmt.Errorf("no element matching %q with text %q%s", selector, textFilter, hint)
 			}
 			return nil, fmt.Errorf("no element matching %q", selector)
 		}
 		time.Sleep(300 * time.Millisecond)
 	}
+}
+
+// cssSampleTexts returns a hint string with sample texts from elements matching
+// the CSS selector, to help the user find the right text filter.
+func cssSampleTexts(page *rod.Page, selector, attempted string) string {
+	jsCode := fmt.Sprintf(`(function(){
+		var els = document.querySelectorAll(%q);
+		var texts = [];
+		var seen = {};
+		for (var i = 0; i < els.length && texts.length < 5; i++) {
+			var t = els[i].textContent.trim();
+			if (t && t.length < 40 && !seen[t]) {
+				seen[t] = true;
+				texts.push(t);
+			}
+		}
+		return JSON.stringify({count: els.length, texts: texts});
+	})()`, selector)
+
+	res, err := proto.RuntimeEvaluate{Expression: jsCode}.Call(page)
+	if err != nil || res.Result == nil {
+		return ""
+	}
+	raw := res.Result.Value.Str()
+	if raw == "" {
+		return ""
+	}
+	return "\n  hint: " + raw
 }
 
 // findByID finds an element by its DOM id attribute.
@@ -248,13 +293,15 @@ func findByID(page *rod.Page, id string) (*rod.Element, error) {
 type elementQuery struct {
 	css        string // --css selector
 	id         string // --id selector
+	index      int    // --index N (0-based), -1 means not set
 	textFilter string // remaining positional args (text filter)
 }
 
-// parseElementArgs extracts --css and --id flags from args.
+// parseElementArgs extracts --css, --id, and --index flags from args.
 // Remaining args are joined as the text filter.
 func parseElementArgs(args []string) elementQuery {
 	var q elementQuery
+	q.index = -1
 	var rest []string
 
 	for i := 0; i < len(args); i++ {
@@ -267,6 +314,14 @@ func parseElementArgs(args []string) elementQuery {
 		case "--id":
 			if i+1 < len(args) {
 				q.id = args[i+1]
+				i++
+			}
+		case "--index":
+			if i+1 < len(args) {
+				n, err := strconv.Atoi(args[i+1])
+				if err == nil {
+					q.index = n
+				}
 				i++
 			}
 		default:
@@ -282,7 +337,7 @@ func parseElementArgs(args []string) elementQuery {
 // Priority: --css > --id > text (AX tree).
 func findElement(page *rod.Page, q elementQuery) (*rod.Element, error) {
 	if q.css != "" {
-		return findByCSS(page, q.css, q.textFilter)
+		return findByCSSIndex(page, q.css, q.textFilter, q.index)
 	}
 	if q.id != "" {
 		return findByID(page, q.id)

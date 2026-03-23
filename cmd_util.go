@@ -4,7 +4,68 @@ import (
 	"fmt"
 	"net"
 	"strconv"
+
+	"github.com/go-rod/rod/lib/proto"
 )
+
+func cmdTexts(ctx *cmdContext, args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: bro texts --css <selector> [--limit N]")
+	}
+
+	_, page, err := connect(ctx)
+	if err != nil {
+		return err
+	}
+
+	var selector string
+	limit := 20
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--css":
+			if i+1 < len(args) {
+				selector = args[i+1]
+				i++
+			}
+		case "--limit":
+			if i+1 < len(args) {
+				n, err := strconv.Atoi(args[i+1])
+				if err == nil {
+					limit = n
+				}
+				i++
+			}
+		default:
+			if selector == "" {
+				selector = args[i]
+			}
+		}
+	}
+
+	if selector == "" {
+		return fmt.Errorf("usage: bro texts --css <selector> [--limit N]")
+	}
+
+	jsCode := fmt.Sprintf(`(function(){
+		var els = document.querySelectorAll(%q);
+		var result = [];
+		for (var i = 0; i < els.length && result.length < %d; i++) {
+			var t = els[i].textContent.trim();
+			if (t && t.length < 80) {
+				result.push(t);
+			}
+		}
+		return JSON.stringify({total: els.length, texts: result});
+	})()`, selector, limit)
+
+	res, err := proto.RuntimeEvaluate{Expression: jsCode}.Call(page)
+	if err != nil {
+		return fmt.Errorf("failed: %w", err)
+	}
+
+	fmt.Println(res.Result.Value.Str())
+	return nil
+}
 
 func cmdFreeport() error {
 	port, err := freePort()

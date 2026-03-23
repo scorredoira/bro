@@ -144,6 +144,8 @@ func main() {
 		err = cmdTest(ctx, cmdArgs)
 
 	// Utilities
+	case "texts":
+		err = cmdTexts(ctx, cmdArgs)
 	case "freeport":
 		err = cmdFreeport()
 
@@ -189,8 +191,8 @@ Inspection:
   html                  Print page HTML
 
 Interaction:
-  click [--css sel] [--id id] [text]   Click element
-  dblclick [--css sel] [--id id] [text] Double-click element
+  click [--css sel] [--id id] [--index N] [text]   Click element
+  dblclick [--css sel] [--id id] [--index N] [text] Double-click element
   fill <label> <value>  Fill input field by label
   select <label> <val>  Select dropdown option
   type <text>           Type raw text into focused element
@@ -225,6 +227,7 @@ Testing:
   test <path> [-w N]  Run .bro test files (recursive)
 
 Utilities:
+  texts --css <sel>     List texts of matching elements
   freeport              Print a free TCP port number
 
 Session:
