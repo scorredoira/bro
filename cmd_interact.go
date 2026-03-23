@@ -152,15 +152,13 @@ func cmdSelect(ctx *cmdContext, args []string) error {
 	label := args[0]
 	value := strings.Join(args[1:], " ")
 
-	// Try standard input roles first, then widget classes by CSS, then
-	// any element with matching text as last resort.
+	// Try standard input roles first, then find the Select/input widget
+	// inside the FormCell that contains the label text.
 	el, err := findInput(page, label)
 	if err != nil {
-		// Look for custom widget dropdowns (.Select, .Input) by label text.
-		// This avoids findByText matching background elements behind modals.
 		el, err = findByCSS(page, ".Select", label)
 		if err != nil {
-			el, err = findByText(page, label)
+			el, err = findSelectByLabel(page, label)
 			if err != nil {
 				return fmt.Errorf("input with label %q not found", label)
 			}
@@ -182,19 +180,49 @@ func cmdSelect(ctx *cmdContext, args []string) error {
 		}
 		time.Sleep(300 * time.Millisecond)
 
-		// Look for the option inside the visible popup first, to avoid
-		// matching background elements behind modals/forms.
-		option, err := findByCSS(page, ".Popup .row, .Popup .option, .Popup li", value)
-		if err != nil {
-			// Fall back to full AX tree search.
-			option, err = findByText(page, value)
-			if err != nil {
-				return fmt.Errorf("option %q not found: %w", value, err)
+		// Look for the option inside the visible popup using a single
+		// JS call that finds and clicks in one shot. This avoids the
+		// 3s retry loop of findByCSS which outlasts the popup lifetime.
+		jsCode := fmt.Sprintf(`(function(){
+			var sels = [".Popup .row", ".Popup .option", ".Popup li"];
+			var lower = %q.toLowerCase();
+			var all = [];
+			for (var s = 0; s < sels.length; s++) {
+				var els = document.querySelectorAll(sels[s]);
+				for (var i = 0; i < els.length; i++) {
+					var t = els[i].textContent.trim();
+					if (t) all.push(t);
+					if (t.toLowerCase() === lower || t.toLowerCase().indexOf(lower) !== -1) {
+						els[i].click();
+						return JSON.stringify({found: true});
+					}
+				}
+			}
+			return JSON.stringify({found: false, options: all.slice(0, 10)});
+		})()`, value)
+
+		// Retry a few times since the popup may need a moment to render.
+		var lastResult string
+		for attempt := 0; attempt < 6; attempt++ {
+			if attempt > 0 {
+				time.Sleep(300 * time.Millisecond)
+			}
+			res, jsErr := proto.RuntimeEvaluate{Expression: jsCode}.Call(page)
+			if jsErr != nil {
+				continue
+			}
+			lastResult = res.Result.Value.Str()
+			if strings.Contains(lastResult, `"found":true`) {
+				goto selected
 			}
 		}
-		if _, err := option.Eval(`() => this.click()`); err != nil {
-			return fmt.Errorf("click option failed: %w", err)
-		}
+
+		// Option not found. Close the popup and report available options.
+		page.KeyActions().Press(input.Escape).Do()
+		time.Sleep(100 * time.Millisecond)
+		return fmt.Errorf("option %q not found\n  available: %s", value, lastResult)
+
+	selected:
 	}
 
 	fmt.Printf("selected %q = %q\n", label, value)

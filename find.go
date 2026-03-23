@@ -348,6 +348,42 @@ func findElement(page *rod.Page, q elementQuery) (*rod.Element, error) {
 	return findByText(page, q.textFilter)
 }
 
+// findSelectByLabel finds a Select widget or input inside the form field
+// (FormCell/FormField) that contains a label matching the given text. This
+// handles the common pattern where the label "Type" is a sibling of the
+// Select widget inside a shared container.
+func findSelectByLabel(page *rod.Page, label string) (*rod.Element, error) {
+	deadline := time.Now().Add(retryTimeout)
+	jsCode := fmt.Sprintf(`(function(){
+		var lower = %q.toLowerCase();
+		var cells = document.querySelectorAll('.FormCell, .FormField, .field');
+		for (var i = 0; i < cells.length; i++) {
+			var labels = cells[i].querySelectorAll('.label, label');
+			for (var j = 0; j < labels.length; j++) {
+				if (labels[j].textContent.trim().toLowerCase().replace(/[*\s]+$/, '') === lower) {
+					var sel = cells[i].querySelector('.Select, select, .Input input, input');
+					if (sel) return sel;
+				}
+			}
+		}
+		return null;
+	})()`, label)
+
+	for {
+		res, err := proto.RuntimeEvaluate{Expression: jsCode}.Call(page)
+		if err == nil && res.Result != nil && res.Result.ObjectID != "" {
+			el, err := page.ElementFromObject(res.Result)
+			if err == nil {
+				return el, nil
+			}
+		}
+		if time.Now().After(deadline) {
+			return nil, fmt.Errorf("no select widget for label %q", label)
+		}
+		time.Sleep(300 * time.Millisecond)
+	}
+}
+
 // describeQuery returns a human-readable description of how the element was found.
 func describeQuery(q elementQuery) string {
 	if q.css != "" && q.textFilter != "" {
