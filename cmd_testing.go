@@ -298,6 +298,9 @@ func runTest(headless bool, t *broTest) testResult {
 		case "exec":
 			err = execShell(expanded, vars)
 
+		case "freeport":
+			err = execFreeport(args, vars)
+
 		case "start":
 			err = execStart(expanded)
 

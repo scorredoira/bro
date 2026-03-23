@@ -143,6 +143,10 @@ func main() {
 	case "test":
 		err = cmdTest(ctx, cmdArgs)
 
+	// Utilities
+	case "freeport":
+		err = cmdFreeport()
+
 	// Internal
 	case "_monitor":
 		cmdMonitor(cmdArgs)
@@ -219,6 +223,9 @@ Dialogs:
 
 Testing:
   test <path> [-w N]  Run .bro test files (recursive)
+
+Utilities:
+  freeport              Print a free TCP port number
 
 Session:
   PORT=$(bro open http://localhost:9092/admin)
