@@ -91,6 +91,16 @@ func cmdOpen(ctx *cmdContext, args []string, portSet bool) error {
 			if !ctx.headless {
 				startMonitor(port, chromeCmd.Process.Pid)
 			}
+
+			// If a URL was given, wait for the page to finish loading.
+			if url != "" {
+				ctx.port = port
+				_, page, err := connect(ctx)
+				if err == nil {
+					page.WaitLoad()
+				}
+			}
+
 			fmt.Println(port)
 			return nil
 		}
