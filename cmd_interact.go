@@ -67,7 +67,7 @@ func cmdDblClick(ctx *cmdContext, args []string) error {
 
 func cmdFill(ctx *cmdContext, args []string) error {
 	if len(args) < 2 {
-		return fmt.Errorf("usage: bro fill <label> <value>")
+		return fmt.Errorf("usage: bro fill [--name <name>] [--css <sel>] <label> <value>")
 	}
 
 	_, page, err := connect(ctx)
@@ -75,13 +75,57 @@ func cmdFill(ctx *cmdContext, args []string) error {
 		return err
 	}
 
-	label := args[0]
-	value := strings.Join(args[1:], " ")
+	// Parse --name and --css flags.
+	var nameAttr, cssAttr string
+	var rest []string
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--name":
+			if i+1 < len(args) {
+				nameAttr = args[i+1]
+				i++
+			}
+		case "--css":
+			if i+1 < len(args) {
+				cssAttr = args[i+1]
+				i++
+			}
+		default:
+			rest = append(rest, args[i])
+		}
+	}
 
-	el, err := findInput(page, label)
+	var el *rod.Element
+	var desc string
+
+	if nameAttr != "" {
+		if len(rest) == 0 {
+			return fmt.Errorf("usage: bro fill --name <name> <value>")
+		}
+		el, err = findByCSS(page, fmt.Sprintf(`input[name=%q], textarea[name=%q]`, nameAttr, nameAttr), "")
+		desc = fmt.Sprintf("name=%q", nameAttr)
+		rest = rest // value is all of rest
+	} else if cssAttr != "" {
+		if len(rest) == 0 {
+			return fmt.Errorf("usage: bro fill --css <selector> <value>")
+		}
+		el, err = findByCSS(page, cssAttr, "")
+		desc = fmt.Sprintf("css=%q", cssAttr)
+	} else {
+		if len(rest) < 2 {
+			return fmt.Errorf("usage: bro fill <label> <value>")
+		}
+		label := rest[0]
+		rest = rest[1:]
+		el, err = findInput(page, label)
+		desc = fmt.Sprintf("%q", label)
+	}
+
 	if err != nil {
 		return err
 	}
+
+	value := strings.Join(rest, " ")
 
 	// Clear existing value.
 	_ = el.SelectAllText()
@@ -91,7 +135,7 @@ func cmdFill(ctx *cmdContext, args []string) error {
 		return fmt.Errorf("fill failed: %w", err)
 	}
 
-	fmt.Printf("filled %q = %q\n", label, value)
+	fmt.Printf("filled %s = %q\n", desc, value)
 	return nil
 }
 

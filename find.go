@@ -81,6 +81,16 @@ func findInput(page *rod.Page, label string) (*rod.Element, error) {
 			}
 		}
 
+		// Fallback: try by HTML name attribute (single attempt, no retry).
+		sel := fmt.Sprintf(`input[name=%q], textarea[name=%q]`, label, label)
+		res, cssErr := proto.RuntimeEvaluate{Expression: fmt.Sprintf(`document.querySelector(%q)`, sel)}.Call(page)
+		if cssErr == nil && res.Result != nil && res.Result.ObjectID != "" {
+			el, cssErr := page.ElementFromObject(res.Result)
+			if cssErr == nil {
+				return el, nil
+			}
+		}
+
 		if time.Now().After(deadline) {
 			return nil, fmt.Errorf("input with label %q not found", label)
 		}
