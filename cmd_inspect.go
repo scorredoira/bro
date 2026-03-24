@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/go-rod/rod"
@@ -105,24 +106,38 @@ func cmdScreenshot(ctx *cmdContext, args []string) error {
 		return err
 	}
 
-	path := "/tmp/bro.png"
+	path := "/tmp/bro.jpg"
 	fullPage := false
+	quality := 80
+	format := proto.PageCaptureScreenshotFormatJpeg
 
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--full":
 			fullPage = true
+		case "--quality":
+			i++
+			if i < len(args) {
+				if q, err := strconv.Atoi(args[i]); err == nil {
+					quality = q
+				}
+			}
+		case "--png":
+			format = proto.PageCaptureScreenshotFormatPng
+			if path == "/tmp/bro.jpg" {
+				path = "/tmp/bro.png"
+			}
 		default:
 			path = args[i]
 		}
 	}
 
-	var data []byte
-	if fullPage {
-		data, err = page.Screenshot(true, nil)
-	} else {
-		data, err = page.Screenshot(false, nil)
+	req := &proto.PageCaptureScreenshot{
+		Format:  format,
+		Quality: &quality,
 	}
+
+	data, err := page.Screenshot(fullPage, req)
 	if err != nil {
 		return fmt.Errorf("screenshot failed: %w", err)
 	}
