@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"strconv"
+	"time"
 
 	"github.com/go-rod/rod/lib/proto"
 )
@@ -21,7 +22,7 @@ func cmdNavigate(ctx *cmdContext, args []string) error {
 		return fmt.Errorf("navigate failed: %w", err)
 	}
 
-	if err := page.WaitLoad(); err != nil {
+	if err := page.Timeout(10 * time.Second).WaitLoad(); err != nil {
 		return fmt.Errorf("wait load failed: %w", err)
 	}
 
@@ -42,7 +43,7 @@ func cmdReload(ctx *cmdContext) error {
 		return fmt.Errorf("reload failed: %w", err)
 	}
 
-	if err := page.WaitLoad(); err != nil {
+	if err := page.Timeout(10 * time.Second).WaitLoad(); err != nil {
 		return fmt.Errorf("wait load failed: %w", err)
 	}
 
@@ -61,7 +62,7 @@ func cmdBack(ctx *cmdContext) error {
 		return fmt.Errorf("back failed: %w", err)
 	}
 
-	page.WaitLoad()
+	page.Timeout(10 * time.Second).WaitLoad()
 	info, _ := page.Info()
 	if info != nil {
 		fmt.Println(info.URL)
@@ -128,7 +129,7 @@ func cmdForward(ctx *cmdContext) error {
 		return fmt.Errorf("forward failed: %w", err)
 	}
 
-	page.WaitLoad()
+	page.Timeout(10 * time.Second).WaitLoad()
 	info, _ := page.Info()
 	if info != nil {
 		fmt.Println(info.URL)

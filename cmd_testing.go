@@ -240,7 +240,7 @@ func runTest(headless bool, t *broTest) testResult {
 					if len(args) > 0 {
 						_, page, cerr := connect(ctx)
 						if cerr == nil {
-							page.WaitLoad()
+							page.Timeout(10 * time.Second).WaitLoad()
 						}
 					}
 				}
@@ -303,6 +303,18 @@ func runTest(headless bool, t *broTest) testResult {
 
 		case "start":
 			err = execStart(expanded)
+
+		case "pause":
+			if len(args) == 0 {
+				err = fmt.Errorf("usage: pause <duration> (e.g. 5s, 500ms)")
+			} else {
+				d, perr := time.ParseDuration(args[0])
+				if perr != nil {
+					err = fmt.Errorf("invalid duration: %s", args[0])
+				} else {
+					time.Sleep(d)
+				}
+			}
 
 		default:
 			err = fmt.Errorf("unknown command: %s", cmd)
@@ -612,7 +624,7 @@ func execStart(rawLine string) error {
 
 	// Wait for the port to accept HTTP connections.
 	client := &http.Client{Timeout: 1 * time.Second}
-	deadline := time.Now().Add(30 * time.Second)
+	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		resp, err := client.Get(fmt.Sprintf("http://localhost:%d/", port))
 		if err == nil {
@@ -623,7 +635,7 @@ func execStart(rawLine string) error {
 	}
 
 	cmd.Process.Kill()
-	return fmt.Errorf("start: port %d not ready after 30s", port)
+	return fmt.Errorf("start: port %d not ready after 5s", port)
 }
 
 // expandVars replaces ${VAR} references in a line.

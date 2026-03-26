@@ -97,7 +97,7 @@ func cmdOpen(ctx *cmdContext, args []string, portSet bool) error {
 				ctx.port = port
 				_, page, err := connect(ctx)
 				if err == nil {
-					page.WaitLoad()
+					page.Timeout(10 * time.Second).WaitLoad()
 				}
 			}
 

@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"strconv"
+	"time"
 
 	"github.com/go-rod/rod/lib/proto"
 )
@@ -82,7 +83,7 @@ func cmdNewPage(ctx *cmdContext, args []string) error {
 	}
 
 	if url != "about:blank" {
-		page.WaitLoad()
+		page.Timeout(10 * time.Second).WaitLoad()
 	}
 
 	info, _ := page.Info()

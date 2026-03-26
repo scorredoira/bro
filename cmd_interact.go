@@ -152,13 +152,13 @@ func cmdSelect(ctx *cmdContext, args []string) error {
 	label := args[0]
 	value := strings.Join(args[1:], " ")
 
-	// Try standard input roles first, then find the Select/input widget
-	// inside the FormCell that contains the label text.
-	el, err := findInput(page, label)
+	// Try fast CSS lookup first (custom widgets like .Select, .Input),
+	// then fall back to accessibility tree (native selects/inputs).
+	el, err := findByCSS(page, ".Select", label)
 	if err != nil {
-		el, err = findByCSS(page, ".Select", label)
+		el, err = findSelectByLabel(page, label)
 		if err != nil {
-			el, err = findSelectByLabel(page, label)
+			el, err = findInput(page, label)
 			if err != nil {
 				return fmt.Errorf("input with label %q not found", label)
 			}
