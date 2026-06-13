@@ -26,14 +26,12 @@ func cmdClick(ctx *cmdContext, args []string) error {
 		return err
 	}
 
-	// CSS/ID-found elements may be off-screen; use JS click to avoid
-	// Rod's scroll-into-view which can hang on complex layouts.
-	if q.css != "" || q.id != "" {
-		_, err = el.Eval(`() => this.click()`)
-	} else {
-		err = el.Click(proto.InputMouseButtonLeft, 1)
-	}
-	if err != nil {
+	// Always click via JS, not Rod's real-mouse click: the latter does a
+	// scroll-into-view that hangs on complex layouts (and intermittently in
+	// long sessions). DOM-level click is enough — controls respond to the
+	// native "click" event. (text queries used to take the mouse path and were
+	// the ones that hung; css/id already used JS.)
+	if _, err = el.Eval(`() => this.click()`); err != nil {
 		return fmt.Errorf("click failed: %w", err)
 	}
 
