@@ -94,6 +94,8 @@ func main() {
 	// Interaction
 	case "click":
 		err = cmdClick(ctx, cmdArgs)
+	case "rightclick", "rclick":
+		err = cmdRightClick(ctx, cmdArgs)
 	case "dblclick":
 		err = cmdDblClick(ctx, cmdArgs)
 	case "fill":
@@ -192,6 +194,7 @@ Inspection:
 
 Interaction:
   click [--css sel] [--id id] [--index N] [text]   Click element
+  rightclick [--css sel] [--id id] [--index N] [text] Right-click element (context menu)
   dblclick [--css sel] [--id id] [--index N] [text] Double-click element
   fill <label> <value>  Fill input field by label
   select <label> <val>  Select dropdown option

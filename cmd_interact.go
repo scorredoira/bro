@@ -39,6 +39,45 @@ func cmdClick(ctx *cmdContext, args []string) error {
 	return nil
 }
 
+func cmdRightClick(ctx *cmdContext, args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: bro rightclick [--css <sel>] [--id <id>] [text]")
+	}
+
+	_, page, err := connect(ctx)
+	if err != nil {
+		return err
+	}
+
+	q := parseElementArgs(args)
+	el, err := findElement(page, q)
+	if err != nil {
+		return err
+	}
+
+	// Dispatch a real "contextmenu" event via JS rather than Rod's real-mouse
+	// right-click: the latter does a scroll-into-view that hangs on complex
+	// layouts (same reason cmdClick uses JS). clientX/clientY are set to the
+	// element's center so menus that position at the pointer land on it.
+	js := `() => {
+		const r = this.getBoundingClientRect();
+		const ev = new MouseEvent("contextmenu", {
+			bubbles: true,
+			cancelable: true,
+			button: 2,
+			clientX: r.left + r.width / 2,
+			clientY: r.top + r.height / 2,
+		});
+		this.dispatchEvent(ev);
+	}`
+	if _, err = el.Eval(js); err != nil {
+		return fmt.Errorf("right-click failed: %w", err)
+	}
+
+	fmt.Printf("right-clicked %s\n", describeQuery(q))
+	return nil
+}
+
 func cmdDblClick(ctx *cmdContext, args []string) error {
 	if len(args) == 0 {
 		return fmt.Errorf("usage: bro dblclick [--css <sel>] [--id <id>] [text]")

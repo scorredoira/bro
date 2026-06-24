@@ -261,6 +261,8 @@ func runTest(headless bool, t *broTest) testResult {
 
 		case "click":
 			err = cmdClick(ctx, args)
+		case "rightclick", "rclick":
+			err = cmdRightClick(ctx, args)
 		case "dblclick":
 			err = cmdDblClick(ctx, args)
 		case "fill":
