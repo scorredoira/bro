@@ -14,31 +14,12 @@ func cmdConsole(ctx *cmdContext) error {
 		return err
 	}
 
-	// Get existing console messages via JS.
 	result, err := page.Eval(`() => {
-		if (!window.__broConsole) return [];
-		return window.__broConsole.map(m => m.level + ': ' + m.text);
+		if (!window.__broConsole) { return [] }
+		return window.__broConsole.map(m => m.level + ': ' + m.text)
 	}`)
-
-	// If no captured messages, install the capture hook and inform the user.
-	if err != nil || result == nil || result.Value.Str() == "[]" || result.Value.Str() == "" {
-		_, err = page.Eval(`() => {
-			if (window.__broConsole) return;
-			window.__broConsole = [];
-			const orig = {};
-			['log', 'warn', 'error', 'info'].forEach(level => {
-				orig[level] = console[level];
-				console[level] = function(...args) {
-					window.__broConsole.push({level: level, text: args.map(String).join(' ')});
-					orig[level].apply(console, args);
-				};
-			});
-		}`)
-		if err != nil {
-			return fmt.Errorf("failed to install console capture: %w", err)
-		}
-
-		return getConsoleFromRuntime(page)
+	if err != nil {
+		return fmt.Errorf("failed to read console messages: %w", err)
 	}
 
 	arr := result.Value.Val()

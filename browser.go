@@ -42,6 +42,12 @@ func connect(ctx *cmdContext) (*rod.Browser, *rod.Page, error) {
 		return nil, nil, fmt.Errorf("failed to connect to page: %w", err)
 	}
 
+	// Every command arms the page's own account of itself — this document and the next one.
+	// Here rather than in the commands that navigate, because the ones that DON'T navigate are
+	// the problem: a click that submits a form lands on a document nobody instrumented, and the
+	// throw it does on the way in is the message you most wanted. See capture.go.
+	installCapture(page)
+
 	return browser, page, nil
 }
 

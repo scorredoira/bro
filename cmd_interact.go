@@ -26,6 +26,13 @@ func cmdClick(ctx *cmdContext, args []string) error {
 		return err
 	}
 
+	if covered, err := coveredBy(el); err != nil {
+		return err
+	} else if covered != "" {
+		return fmt.Errorf("%s is behind %s — a user clicking there would hit that instead",
+			describeQuery(q), covered)
+	}
+
 	// Always click via JS, not Rod's real-mouse click: the latter does a
 	// scroll-into-view that hangs on complex layouts (and intermittently in
 	// long sessions). DOM-level click is enough — controls respond to the
@@ -37,6 +44,43 @@ func cmdClick(ctx *cmdContext, args []string) error {
 
 	fmt.Printf("clicked %s\n", describeQuery(q))
 	return nil
+}
+
+// coveredBy reports what is painted on top of an element, or "" when nothing is.
+//
+// A JS click reaches the element directly: through an open dialog's backdrop, through
+// pointer-events:none, through anything. That is what makes it immune to the scroll hang, and
+// it is also how this tool can report "clicked" for an interaction no user could perform —
+// the handler runs, the check passes, and the thing being verified was never reachable.
+// Refusing is the whole point of a verification tool.
+//
+// It asks the browser rather than reasoning about z-index: elementFromPoint is the authority
+// on what a click at that point would hit. An element containing the hit (its own label) or
+// contained by it counts as itself.
+//
+// Off screen it declines to judge — elementFromPoint answers null outside the viewport, and
+// that is not "covered". Scrolling first is exactly what this command avoids.
+func coveredBy(el *rod.Element) (string, error) {
+	js := `() => {
+		const r = this.getBoundingClientRect()
+		if (r.width <= 0 || r.height <= 0) { return "" }
+
+		const x = r.left + r.width / 2
+		const y = r.top + r.height / 2
+		if (x < 0 || y < 0 || x > innerWidth || y > innerHeight) { return "" }
+
+		const at = document.elementFromPoint(x, y)
+		if (!at || at === this || this.contains(at) || at.contains(this)) { return "" }
+
+		const text = (at.textContent || "").replace(/\s+/g, " ").trim().slice(0, 40)
+		return text ? at.tagName.toLowerCase() + ' "' + text + '"' : at.tagName.toLowerCase()
+	}`
+
+	result, err := el.Eval(js)
+	if err != nil {
+		return "", fmt.Errorf("check what is on top: %w", err)
+	}
+	return result.Value.Str(), nil
 }
 
 func cmdRightClick(ctx *cmdContext, args []string) error {
@@ -53,6 +97,13 @@ func cmdRightClick(ctx *cmdContext, args []string) error {
 	el, err := findElement(page, q)
 	if err != nil {
 		return err
+	}
+
+	if covered, err := coveredBy(el); err != nil {
+		return err
+	} else if covered != "" {
+		return fmt.Errorf("%s is behind %s — a user right-clicking there would hit that instead",
+			describeQuery(q), covered)
 	}
 
 	// Dispatch a real "contextmenu" event via JS rather than Rod's real-mouse
