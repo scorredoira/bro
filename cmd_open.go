@@ -73,9 +73,14 @@ func cmdOpen(ctx *cmdContext, args []string, portSet bool) error {
 		chromeArgs = append(chromeArgs, "--password-store=basic", "--use-mock-keychain")
 	}
 
-	if url != "" {
-		chromeArgs = append(chromeArgs, url)
-	}
+	// Launched BLANK, and navigated below once a session exists. Handing Chrome the url here
+	// means it is already loading before anything can attach, so the first document — the one
+	// you opened bro to look at — is the one document nothing is watching: its console, its
+	// throw on the way in, its data call that 404s, all gone before the first command runs.
+	//
+	// about:blank rather than no url at all: with none, Chrome shows the new-tab page, which
+	// findPageTarget skips as a chrome:// target and leaves nothing to connect to.
+	chromeArgs = append(chromeArgs, "about:blank")
 
 	chromeCmd := exec.Command(chromePath, chromeArgs...)
 	if err := chromeCmd.Start(); err != nil {
@@ -92,16 +97,28 @@ func cmdOpen(ctx *cmdContext, args []string, portSet bool) error {
 				startMonitor(port, chromeCmd.Process.Pid)
 			}
 
-			// If a URL was given, wait for the page to finish loading.
-			if url != "" {
-				ctx.port = port
-				_, page, err := connect(ctx)
-				if err == nil {
-					page.Timeout(10 * time.Second).WaitLoad()
-				}
+			// The port goes out FIRST, whatever happens next: Chrome is already running,
+			// and a caller who never learns its port has no way to close it.
+			fmt.Println(port)
+
+			if url == "" {
+				return nil
 			}
 
-			fmt.Println(port)
+			// connect() arms the capture — on this blank document and on the next one —
+			// so the navigation below is watched from its first script.
+			ctx.port = port
+			_, page, err := connect(ctx)
+			if err != nil {
+				return fmt.Errorf("chrome started but could not be driven: %w", err)
+			}
+
+			if err := page.Navigate(url); err != nil {
+				return fmt.Errorf("navigate failed: %w", err)
+			}
+			if err := page.Timeout(10 * time.Second).WaitLoad(); err != nil {
+				return fmt.Errorf("wait load failed: %w", err)
+			}
 			return nil
 		}
 		time.Sleep(200 * time.Millisecond)
