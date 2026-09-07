@@ -16,6 +16,10 @@ type cmdContext struct {
 	headless bool
 	workers  int
 	pid      int // Chrome process ID (used by tests for cleanup)
+
+	// How dialogs get answered. Lives here rather than in a global because `bro test -w N`
+	// runs its files as goroutines in one process, each with its own context and its own port.
+	dialogs *dialogPolicy
 }
 
 // chromeTarget represents a target from Chrome's /json/list endpoint.
@@ -47,6 +51,13 @@ func connect(ctx *cmdContext) (*rod.Browser, *rod.Page, error) {
 	// the problem: a click that submits a form lands on a document nobody instrumented, and the
 	// throw it does on the way in is the message you most wanted. See capture.go.
 	installCapture(page)
+
+	// Same reason, one step further: a dialog stops the page dead, and nothing this process
+	// does afterwards can reach it. See dialogs.go.
+	if ctx.dialogs == nil {
+		ctx.dialogs = &dialogPolicy{}
+	}
+	armDialogs(page, ctx.dialogs)
 
 	return browser, page, nil
 }

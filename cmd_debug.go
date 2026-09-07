@@ -5,7 +5,6 @@ import (
 	"strings"
 
 	"github.com/go-rod/rod"
-	"github.com/go-rod/rod/lib/proto"
 )
 
 func cmdConsole(ctx *cmdContext) error {
@@ -122,14 +121,16 @@ func formatBytes(v interface{}) string {
 	}
 }
 
+// cmdDialog chooses how the dialogs this run meets are answered. It does not wait for one:
+// every command already answers them on its own (see dialogs.go), and the default is accept —
+// a user who clicked Delete and is asked "are you sure?" presses OK.
+//
+// So this is only worth calling to say DISMISS, or to give a prompt its text, and only from
+// inside a .bro test file: the choice lives in the process, and a standalone `bro dialog` is a
+// process that exits before the action that opens the dialog ever runs.
 func cmdDialog(ctx *cmdContext, args []string) error {
 	if len(args) == 0 {
 		return fmt.Errorf("usage: bro dialog accept [text] | dismiss")
-	}
-
-	_, page, err := connect(ctx)
-	if err != nil {
-		return err
 	}
 
 	action := strings.ToLower(args[0])
@@ -139,25 +140,12 @@ func cmdDialog(ctx *cmdContext, args []string) error {
 		if len(args) > 1 {
 			text = strings.Join(args[1:], " ")
 		}
-		wait := page.EachEvent(func(e *proto.PageJavascriptDialogOpening) bool {
-			_ = proto.PageHandleJavaScriptDialog{
-				Accept:     true,
-				PromptText: text,
-			}.Call(page)
-			return true
-		})
-		go wait()
-		fmt.Println("dialog handler set to accept")
+		ctx.dialogPolicy().set(true, text)
+		fmt.Println("dialogs will be accepted")
 
 	case "dismiss":
-		wait := page.EachEvent(func(e *proto.PageJavascriptDialogOpening) bool {
-			_ = proto.PageHandleJavaScriptDialog{
-				Accept: false,
-			}.Call(page)
-			return true
-		})
-		go wait()
-		fmt.Println("dialog handler set to dismiss")
+		ctx.dialogPolicy().set(false, "")
+		fmt.Println("dialogs will be dismissed")
 
 	default:
 		return fmt.Errorf("unknown dialog action: %s (use accept or dismiss)", action)

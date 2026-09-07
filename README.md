@@ -377,24 +377,39 @@ bro --port $PORT network
 
 ### Dialogs
 
-#### dialog accept
+**You do not have to do anything.** Every command answers the dialogs the page opens, so none of
+them can freeze it. What each kind gets:
 
-Accept the next JavaScript dialog.
+| Dialog | Answer | Why |
+|--------|--------|-----|
+| `beforeunload` — "Leave site? Changes you made may not be saved" | **accepted** | It is not a question about the app: the command it interrupted is the one that asked to leave, and the unsaved edits are the ones this run typed. |
+| `alert` | **accepted** | One button. Accept and dismiss both close it. |
+| `confirm`, `prompt` | **dismissed** | A real question. Pressing OK on "Delete everything?" while nobody is looking is not a tool's call. |
 
-```bash
-bro --port $PORT dialog accept
-bro --port $PORT dialog accept "prompt text"
+Each one is reported on stderr, so an answer nobody typed is never silent:
+
+```
+dialog: beforeunload "" → accepted
+dialog: confirm "Delete this booking?" → dismissed
 ```
 
-#### dialog dismiss
+This is not a convenience. A dialog blocks the page until somebody presses a button, and bro is a
+CLI: the command that raised it would hang, every command after it would time out, and the only
+way out would be a human walking to the machine and clicking.
 
-Dismiss the next dialog.
+#### dialog accept / dialog dismiss
+
+Say yes to the confirms and prompts that follow, or go back to saying no. `accept` takes the text
+a `prompt` should be answered with:
 
 ```bash
-bro --port $PORT dialog dismiss
+dialog accept
+click Delete
 ```
 
-**Note:** Call `dialog` *before* triggering the action that opens the dialog.
+**Note:** the choice lives in the process, so it belongs in a `.bro` test file, before the
+command that opens the dialog. As a standalone shell command it does nothing — that process
+exits before the dialog is ever raised.
 
 ---
 

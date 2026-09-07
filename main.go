@@ -222,9 +222,9 @@ Debug:
   console               Show console messages
   network               Show network requests
 
-Dialogs:
-  dialog accept [text]  Accept dialog (optional input for prompts)
-  dialog dismiss        Dismiss dialog
+Dialogs (answered on their own, and reported; a confirm gets a no):
+  dialog accept [text]  Say yes to them, with text for prompts
+  dialog dismiss        Back to saying no
 
 Testing:
   test <path> [-w N]  Run .bro test files (recursive)
