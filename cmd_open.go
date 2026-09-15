@@ -69,9 +69,9 @@ func cmdOpen(ctx *cmdContext, args []string, portSet bool) error {
 		return err
 	}
 
-	if runtime.GOOS == "darwin" {
-		chromeArgs = append(chromeArgs, "--password-store=basic", "--use-mock-keychain")
-	}
+	// Every OS, not only macOS: on Linux with no desktop session Chrome waits forever on the
+	// system keyring before it sends the first request, so every page hangs on load.
+	chromeArgs = append(chromeArgs, "--password-store=basic", "--use-mock-keychain")
 
 	// Launched BLANK, and navigated below once a session exists. Handing Chrome the url here
 	// means it is already loading before anything can attach, so the first document — the one
