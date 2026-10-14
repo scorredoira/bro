@@ -459,7 +459,7 @@ Rules:
 | `assert text <text>` | Text is visible on the page |
 | `assert gone <text>` | Text is NOT on the page |
 | `assert title <text>` | Page title contains text |
-| `assert js <expression>` | JavaScript expression returns truthy |
+| `assert js <expression>` | JavaScript expression returns truthy (a promise is awaited first) |
 
 Assertions retry automatically until they pass or timeout. No need for explicit waits or sleeps between actions and assertions.
 
@@ -493,7 +493,7 @@ navigate http://localhost:9092/reset-password?token=${result}
 Rules:
 - Fails the test if exit code ≠ 0
 - Stdout is always captured in `${result}` (overwrites previous value)
-- `${result}` is expanded in all subsequent lines
+- `${result}` is expanded in all subsequent lines; only the braced form is expanded, so `$25.00` stays as written
 - Use `exec --as VARNAME` for named variables: `exec --as TOKEN mysql ...` → `${TOKEN}`
 - `exec` runs before Chrome is launched — useful for setup (creating users, cleaning DB)
 
