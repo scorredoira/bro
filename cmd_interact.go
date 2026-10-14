@@ -21,16 +21,9 @@ func cmdClick(ctx *cmdContext, args []string) error {
 	}
 
 	q := parseElementArgs(args)
-	el, err := findElement(page, q)
+	el, err := findUncovered(page, q)
 	if err != nil {
 		return err
-	}
-
-	if covered, err := coveredBy(el); err != nil {
-		return err
-	} else if covered != "" {
-		return fmt.Errorf("%s is behind %s — a user clicking there would hit that instead",
-			describeQuery(q), covered)
 	}
 
 	// Always click via JS, not Rod's real-mouse click: the latter does a
@@ -38,12 +31,58 @@ func cmdClick(ctx *cmdContext, args []string) error {
 	// long sessions). DOM-level click is enough — controls respond to the
 	// native "click" event. (text queries used to take the mouse path and were
 	// the ones that hung; css/id already used JS.)
-	if _, err = el.Eval(`() => this.click()`); err != nil {
+	if _, err = el.Eval(userClickJS); err != nil {
 		return fmt.Errorf("click failed: %w", err)
 	}
 
 	fmt.Printf("clicked %s\n", describeQuery(q))
 	return nil
+}
+
+// userClickJS is a DOM-level click with what a mouse does around it. A bare this.click() leaves
+// the focus where it was, so the field being edited never gets its blur: a widget that commits
+// its value on blur saves the old one, and a user clicking Save would never see that.
+// The focus moves on mousedown unless a handler prevents it, as in the browser.
+const userClickJS = `() => {
+	const opts = { bubbles: true, cancelable: true, composed: true, view: window, button: 0 }
+	this.dispatchEvent(new PointerEvent("pointerdown", opts))
+	if (this.dispatchEvent(new MouseEvent("mousedown", opts))) {
+		const focusable = this.closest('a[href], button, input, select, textarea, summary, [tabindex], [contenteditable=""], [contenteditable="true"]')
+		if (focusable && !focusable.disabled) {
+			focusable.focus({ preventScroll: true })
+		} else if (document.activeElement && document.activeElement !== document.body) {
+			document.activeElement.blur()
+		}
+	}
+	this.dispatchEvent(new PointerEvent("pointerup", opts))
+	this.dispatchEvent(new MouseEvent("mouseup", opts))
+	this.click()
+}`
+
+// findUncovered finds the element and waits, as the finders do, until nothing is painted on top
+// of it: a popup fading out covers what is under it for a moment, and a user waits for it to go.
+func findUncovered(page *rod.Page, q elementQuery) (*rod.Element, error) {
+	deadline := time.Now().Add(retryTimeout)
+	for {
+		el, err := findElement(page, q)
+		if err != nil {
+			return nil, err
+		}
+
+		covered, err := coveredBy(el)
+		if err != nil {
+			return nil, err
+		}
+		if covered == "" {
+			return el, nil
+		}
+
+		if time.Now().After(deadline) {
+			return nil, fmt.Errorf("%s is behind %s — a user clicking there would hit that instead",
+				describeQuery(q), covered)
+		}
+		time.Sleep(300 * time.Millisecond)
+	}
 }
 
 // coveredBy reports what is painted on top of an element, or "" when nothing is.
