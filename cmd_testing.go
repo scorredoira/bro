@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -481,7 +482,8 @@ func assertTitle(ctx *cmdContext, text string, timeout time.Duration) error {
 }
 
 func assertJS(ctx *cmdContext, expr string, timeout time.Duration) error {
-	code := fmt.Sprintf("() => { return !!(%s) }", expr)
+	// awaited: a promise is always truthy, so a check written as fetch().then(...) passed unread
+	code := fmt.Sprintf("async () => { return !!(await (%s)) }", expr)
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		_, page, err := connect(ctx)
@@ -640,11 +642,17 @@ func execStart(rawLine string) error {
 	return fmt.Errorf("start: port %d not ready after 5s", port)
 }
 
+var envRef = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
+
 // expandVars replaces ${VAR} references in a line.
 // Priority: exec-captured vars first, then environment variables.
+// Only the braced form: os.ExpandEnv also takes $NAME and $1, so "$25.00" in an
+// assertion became "5.00" and the check passed against the wrong amount.
 func expandVars(line string, vars map[string]string) string {
 	for name, value := range vars {
 		line = strings.ReplaceAll(line, "${"+name+"}", value)
 	}
-	return os.ExpandEnv(line)
+	return envRef.ReplaceAllStringFunc(line, func(ref string) string {
+		return os.Getenv(envRef.FindStringSubmatch(ref)[1])
+	})
 }
