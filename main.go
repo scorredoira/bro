@@ -144,6 +144,8 @@ func main() {
 	// Testing
 	case "test":
 		err = cmdTest(ctx, cmdArgs)
+	case "memory":
+		err = cmdMemory(ctx, cmdArgs)
 
 	// Utilities
 	case "texts":
@@ -228,6 +230,8 @@ Dialogs (answered on their own, and reported; a confirm gets a no):
 
 Testing:
   test <path> [-w N]  Run .bro test files (recursive)
+  memory [mark]         What the tab keeps alive once its garbage is collected (nodes,
+                        listeners, heap, documents); mark keeps it for "assert memory"
 
 Utilities:
   texts --css <sel>     List texts of matching elements

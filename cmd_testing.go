@@ -292,6 +292,9 @@ func runTest(headless bool, t *broTest) testResult {
 		case "js":
 			err = cmdJS(ctx, args)
 
+		case "memory":
+			err = cmdMemory(ctx, args)
+
 		case "dialog":
 			err = cmdDialog(ctx, args)
 
@@ -344,7 +347,7 @@ func runTest(headless bool, t *broTest) testResult {
 // execAssert runs an assertion with automatic retry until timeout.
 func execAssert(ctx *cmdContext, args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: assert <url|text|gone|title|js> <value>")
+		return fmt.Errorf("usage: assert <url|text|gone|title|js|memory> <value>")
 	}
 
 	timeout := defaultTimeout
@@ -368,6 +371,12 @@ func execAssert(ctx *cmdContext, args []string) error {
 
 	kind := args[0]
 	value := strings.Join(args[1:], " ")
+
+	// memory is measured once, against the mark: collected garbage does not come back by
+	// waiting
+	if kind == "memory" {
+		return assertMemory(ctx, args[1:])
+	}
 
 	switch kind {
 	case "url":

@@ -426,6 +426,20 @@ bro --headless test tests/               # headless mode (no browser window)
 bro -w 4 --headless test tests/          # 4 tests in parallel
 ```
 
+#### memory
+
+What the tab keeps alive once its garbage is collected, read through the DevTools protocol:
+DOM nodes, event listeners, JS heap (bytes) and documents. A screen left and opened again leaves
+them where they were; counts that grow with every round are a leak.
+
+```bash
+bro --port $PORT memory          # nodes 950 listeners 211 heap 9100000 documents 8
+bro --port $PORT memory mark     # the same, kept as the mark "assert memory" measures from
+```
+
+The mark lives in the port's Chrome profile, so it holds from one command, or one line of a test,
+to the next.
+
 ---
 
 ## Test Files
@@ -460,8 +474,9 @@ Rules:
 | `assert gone <text>` | Text is NOT on the page |
 | `assert title <text>` | Page title contains text |
 | `assert js <expression>` | JavaScript expression returns truthy (a promise is awaited first) |
+| `assert memory nodes 50 listeners 10` | What the tab keeps alive grew since `memory mark` by no more than that (`nodes`, `listeners`, `heap`, `documents`); measured once, no retry |
 
-Assertions retry automatically until they pass or timeout. No need for explicit waits or sleeps between actions and assertions.
+Assertions retry automatically until they pass or timeout (`assert memory` excepted). No need for explicit waits or sleeps between actions and assertions.
 
 Override the default 10s timeout:
 
