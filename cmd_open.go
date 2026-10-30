@@ -73,6 +73,11 @@ func cmdOpen(ctx *cmdContext, args []string, portSet bool) error {
 	// system keyring before it sends the first request, so every page hangs on load.
 	chromeArgs = append(chromeArgs, "--password-store=basic", "--use-mock-keychain")
 
+	// Chrome refuses to start as root on Linux with its sandbox on, and a CI server runs as root.
+	if runtime.GOOS == "linux" && os.Getuid() == 0 {
+		chromeArgs = append(chromeArgs, "--no-sandbox")
+	}
+
 	// Launched BLANK, and navigated below once a session exists. Handing Chrome the url here
 	// means it is already loading before anything can attach, so the first document — the one
 	// you opened bro to look at — is the one document nothing is watching: its console, its
